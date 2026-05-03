@@ -36,23 +36,91 @@ function addr(v: string) {
   return v.toLowerCase();
 }
 
-// KeeperHub may send decoded args directly, or raw EVM log topics+data.
-// We handle both.
-export function decodeKeeperHubPayload(body: Record<string, unknown>): ParsedEvent {
-  const txHash = (body.transactionHash as string) ?? (body.tx_hash as string) ?? '';
-  const blockNumber = Number(body.blockNumber ?? body.block_number ?? 0);
+// KeeperHub concatenated payload format:
+// payer(0x+40hex) + merchant(0x+40hex) + amount+treeSize(decimal) + txHash(0x+64hex) + merchantWithdrawAfterBlocks+blockNumber(decimal)
+// All fields joined with no separator.
+const CONCAT_RE = /^(0x[0-9a-fA-F]{40})(0x[0-9a-fA-F]{40})(\d+)(0x[0-9a-fA-F]{64})(\d+)$/i;
+
+function splitAmountTreeSize(combined: string): { amount: string; treeSize: number } {
+  // treeSize is uint16, typically a power of 2 (1024, 2048, 4096, 8192 = 4 digits).
+  // Try 4 digits first, then 5, then 3, 2, 1 — avoids matching a single trailing digit.
+  for (const len of [4, 5, 3, 2, 1]) {
+    if (combined.length <= len) continue;
+    const ts = parseInt(combined.slice(-len), 10);
+    if (ts > 0 && (ts & (ts - 1)) === 0) {
+      return { amount: combined.slice(0, -len), treeSize: ts };
+    }
+  }
+  // Fallback: last 4 chars as treeSize
+  return { amount: combined.slice(0, -4), treeSize: parseInt(combined.slice(-4), 10) };
+}
+
+function parseKeeperHubConcatPayload(raw: string): ParsedEvent {
+  const m = raw.trim().match(CONCAT_RE);
+  if (!m) throw new Error(`Cannot parse KeeperHub concat payload: ${raw.slice(0, 120)}`);
+
+  const [, payer, merchant, amountAndTreeSize, txHash, blocksRemainder] = m;
+
+  const { amount, treeSize } = splitAmountTreeSize(amountAndTreeSize);
+
+  // blocksRemainder = merchantWithdrawAfterBlocks + blockNumber (both ~same magnitude on Base Sepolia)
+  const mid = Math.floor(blocksRemainder.length / 2);
+  const merchantWithdrawAfterBlock = Number(blocksRemainder.slice(0, mid));
+  const blockNumber = Number(blocksRemainder.slice(mid));
+
+  const token = (process.env.TOKEN_ADDRESS ?? '0x0000000000000000000000000000000000000000').toLowerCase();
+
+  return {
+    type: 'ChannelCreated',
+    payer: addr(payer),
+    merchant: addr(merchant),
+    token,
+    txHash,
+    blockNumber,
+    amount,
+    treeSize,
+    merchantWithdrawAfterBlock,
+  };
+}
+
+// KeeperHub may send:
+//   1. Decoded JSON  { event, args, transactionHash, blockNumber }
+//   2. Raw EVM log   { topics, data, transactionHash }
+//   3. Wrapper JSON  { webhookPayload: "<concat string>" }  (KeeperHub no-code format)
+//   4. Plain string  "<concat string>"  (sent as text/plain)
+export function decodeKeeperHubPayload(body: Record<string, unknown> | string): ParsedEvent {
+  // Normalise to an object
+  let resolved: Record<string, unknown>;
+  if (typeof body === 'string') {
+    try {
+      resolved = JSON.parse(body);
+    } catch {
+      // Treat the whole string as the concatenated payload
+      return parseKeeperHubConcatPayload(body);
+    }
+  } else {
+    resolved = body;
+  }
+
+  const txHash = (resolved.transactionHash as string) ?? (resolved.tx_hash as string) ?? '';
+  const blockNumber = Number(resolved.blockNumber ?? resolved.block_number ?? 0);
+
+  // ── KeeperHub no-code wrapper { webhookPayload: "0x..." } ───────────────────
+  if (typeof resolved.webhookPayload === 'string') {
+    return parseKeeperHubConcatPayload(resolved.webhookPayload);
+  }
 
   // ── Pre-decoded path (KeeperHub decoded for us) ───────────────────────────
-  const eventName = (body.event ?? body.eventName ?? body.name) as string | undefined;
-  const args = (body.args ?? body.data ?? body.params) as Record<string, unknown> | undefined;
+  const eventName = (resolved.event ?? resolved.eventName ?? resolved.name) as string | undefined;
+  const args = (resolved.args ?? resolved.data ?? resolved.params) as Record<string, unknown> | undefined;
 
   if (eventName && args) {
     return buildFromDecoded(eventName, args, txHash, blockNumber);
   }
 
   // ── Raw log path (topics + data hex) ─────────────────────────────────────
-  const topics = body.topics as string[] | undefined;
-  const data = (body.data ?? body.log_data) as string | undefined;
+  const topics = resolved.topics as string[] | undefined;
+  const data = (resolved.data ?? resolved.log_data) as string | undefined;
 
   if (topics && data !== undefined) {
     const parsed = iface.parseLog({ topics, data });
@@ -62,7 +130,7 @@ export function decodeKeeperHubPayload(body: Record<string, unknown>): ParsedEve
     ), txHash, blockNumber);
   }
 
-  throw new Error(`Cannot decode payload: ${JSON.stringify(body)}`);
+  throw new Error(`Cannot decode payload: ${JSON.stringify(resolved)}`);
 }
 
 function buildFromDecoded(

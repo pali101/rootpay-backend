@@ -10,11 +10,13 @@ webhookRouter.post('/keeperhub', async (req: Request, res: Response) => {
   // Always 200 immediately — KeeperHub won't retry on 2xx
   res.sendStatus(200);
 
-  const raw = JSON.stringify(req.body);
+  const body = req.body as Record<string, unknown> | string;
+  const raw = typeof body === 'string' ? body : JSON.stringify(body);
+  console.log('[webhook] received body type:', typeof body, '| preview:', raw.slice(0, 120));
 
   let event;
   try {
-    event = decodeKeeperHubPayload(req.body);
+    event = decodeKeeperHubPayload(body);
   } catch (err) {
     console.error('[webhook] decode error:', err, '\nbody:', raw);
     return;

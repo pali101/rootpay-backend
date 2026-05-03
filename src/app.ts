@@ -7,6 +7,8 @@ import { x402Router } from './routes/x402.js';
 export function createApp() {
   const app = express();
   app.use(express.json());
+  // Capture bodies KeeperHub may send with non-JSON Content-Type
+  app.use(express.text({ type: '*/*' }));
 
   app.get('/health', (_req, res) => {
     res.json({
