@@ -168,7 +168,7 @@ function buildFromDecoded(
         type: 'ChannelRedeemed',
         ...base,
         amountPaid: BigInt(String(args.amountPaid)).toString(),
-        leafIndex: Number(args.leafIndex),
+        leafIndex: Number(String(args.leafIndex).replace(/\D/g, '')),
       };
 
     case 'ChannelRefunded':
