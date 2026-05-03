@@ -12,7 +12,7 @@ webhookRouter.post('/keeperhub', async (req: Request, res: Response) => {
 
   const body = req.body as Record<string, unknown> | string;
   const raw = typeof body === 'string' ? body : JSON.stringify(body);
-  console.log('[webhook] received body type:', typeof body, '| preview:', raw.slice(0, 120));
+  console.log('[webhook] content-type:', req.headers['content-type'], '| preview:', raw.slice(0, 120));
 
   let event;
   try {

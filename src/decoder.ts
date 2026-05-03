@@ -133,21 +133,27 @@ export function decodeKeeperHubPayload(body: Record<string, unknown> | string): 
   throw new Error(`Cannot decode payload: ${JSON.stringify(resolved)}`);
 }
 
+// Normalise KeeperHub event names: "Channel Created" → "ChannelCreated"
+function normaliseEventName(name: string): string {
+  return name.replace(/\s+/g, '');
+}
+
 function buildFromDecoded(
   name: string,
   args: Record<string, unknown>,
   txHash: string,
   blockNumber: number,
 ): ParsedEvent {
+  const fallbackToken = (process.env.TOKEN_ADDRESS ?? '0x0000000000000000000000000000000000000000').toLowerCase();
   const base = {
     payer: addr(String(args.payer)),
     merchant: addr(String(args.merchant)),
-    token: addr(String(args.token)),
+    token: args.token ? addr(String(args.token)) : fallbackToken,
     txHash,
     blockNumber,
   };
 
-  switch (name) {
+  switch (normaliseEventName(name)) {
     case 'ChannelCreated':
       return {
         type: 'ChannelCreated',
