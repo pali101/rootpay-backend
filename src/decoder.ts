@@ -182,7 +182,7 @@ function buildFromDecoded(
       return {
         type: 'ChannelReclaimed',
         ...base,
-        reclaimedAtBlock: Number(args.blockNumber),
+        reclaimedAtBlock: Number(args.blockNumber ?? blockNumber),
       };
 
     default:
